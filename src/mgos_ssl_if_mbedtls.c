@@ -22,12 +22,15 @@
 
 #if MG_ENABLE_SSL && MG_SSL_IF == MG_SSL_IF_MBEDTLS_MGOS
 
+#define MBEDTLS_ALLOW_PRIVATE_ACCESS
+
+#include "mbedtls/ctr_drbg.h"
 #include "mbedtls/debug.h"
 #include "mbedtls/ecp.h"
-#include "mbedtls/net.h"
+#include "mbedtls/net_sockets.h"
 #include "mbedtls/platform.h"
+#include "mbedtls/private_access.h"
 #include "mbedtls/ssl.h"
-#include "mbedtls/ssl_internal.h"
 #include "mbedtls/version.h"
 #include "mbedtls/x509_crt.h"
 
@@ -212,8 +215,7 @@ enum mg_ssl_if_result mg_ssl_if_conn_init(
   }
 
   // TLS 1.2 and up
-  mbedtls_ssl_conf_min_version(ctx->conf, MBEDTLS_SSL_MAJOR_VERSION_3,
-                               MBEDTLS_SSL_MINOR_VERSION_3);
+  mbedtls_ssl_conf_min_tls_version(ctx->conf, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_rng(ctx->conf, mg_ssl_if_mbed_random, nc);
 
   if (params->cert != NULL &&
@@ -538,10 +540,14 @@ static enum mg_ssl_if_result mg_use_ca_cert(struct mgos_ssl_if_mbed_ctx *ctx,
 #ifdef MBEDTLS_X509_CA_CHAIN_ON_DISK
   ctx->ca_chain_file = strdup(ca_cert);
   if (ctx->ca_chain_file == NULL) return MG_SSL_ERROR;
-  if (mbedtls_ssl_conf_ca_chain_file(ctx->conf, ctx->ca_chain_file, NULL) !=
-      0) {
+
+  mbedtls_x509_crt cacert;
+  mbedtls_x509_crt_init(&cacert);
+
+  if ((mbedtls_x509_crt_parse_file(&cacert, ctx->ca_chain_file)) != 0) {
     return MG_SSL_ERROR;
   }
+  mbedtls_ssl_conf_ca_chain(ctx->conf, &cacert, NULL);
 #else
   ctx->ca_cert = (mbedtls_x509_crt *) calloc(1, sizeof(*ctx->ca_cert));
   mbedtls_x509_crt_init(ctx->ca_cert);
@@ -569,7 +575,10 @@ static enum mg_ssl_if_result mg_use_cert(struct mgos_ssl_if_mbed_ctx *ctx,
     MG_SET_PTRPTR(err_msg, "Invalid SSL cert");
     return MG_SSL_ERROR;
   }
-  if (mbedtls_pk_parse_keyfile(ctx->key, key, NULL) != 0) {
+  mbedtls_ctr_drbg_context drbg_ctx;
+  mbedtls_ctr_drbg_init(&drbg_ctx);
+  if (mbedtls_pk_parse_keyfile(ctx->key, key, NULL, mbedtls_ctr_drbg_random,
+                               &drbg_ctx) != 0) {
     MG_SET_PTRPTR(err_msg, "Invalid SSL key");
     return MG_SSL_ERROR;
   }
